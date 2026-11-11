@@ -4,6 +4,12 @@ export interface PeerInfo {
   username?: string | null;
 }
 
+export interface PendingRequestInfo {
+  peer: PeerInfo;
+  introducedBy?: string | null;
+  roomName?: string | null;
+}
+
 export interface ChatMessagePayload {
   id: string;
   senderId: string;
@@ -21,6 +27,22 @@ export interface DirectoryUser {
   lastSeen: number;
 }
 
+export interface GroupRoomMember {
+  nodeId: string;
+  nickname: string;
+  username?: string | null;
+  ticket: string;
+  lastSeen: number;
+}
+
+export interface GroupRoom {
+  roomId: string;
+  name: string;
+  hostNodeId: string;
+  hostName: string;
+  members: GroupRoomMember[];
+}
+
 export interface StateSnapshot {
   nodeId: string;
   ticket: string;
@@ -28,8 +50,12 @@ export interface StateSnapshot {
   username: string | null;
   serverUrl: string;
   registeredOnServer: boolean;
+  roomId: string | null;
+  roomName: string | null;
   connectedPeer: PeerInfo | null;
+  connectedPeers: PeerInfo[];
   pendingRequest: PeerInfo | null;
+  pendingRequests: PendingRequestInfo[];
   messages: ChatMessagePayload[];
 }
 
@@ -37,6 +63,8 @@ export type P2PEvent =
   | {
       type: "connection-requested";
       peer: PeerInfo;
+      introducedBy?: string | null;
+      roomName?: string | null;
     }
   | {
       type: "peer-connected";
@@ -44,6 +72,7 @@ export type P2PEvent =
     }
   | {
       type: "peer-disconnected";
+      peer?: PeerInfo | null;
       reason?: string;
     }
   | {

@@ -1,6 +1,6 @@
 pub mod p2p;
 
-use p2p::{ChatMessagePayload, ChatNode, DirectoryUser, PeerInfo, StateSnapshot};
+use p2p::{ChatMessagePayload, ChatNode, DirectoryUser, GroupRoom, PeerInfo, StateSnapshot};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager, State, WindowEvent};
 use tokio::sync::OnceCell;
@@ -136,13 +136,47 @@ async fn send_message(
 }
 
 #[tauri::command]
+async fn create_group_room(
+    room_name: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<StateSnapshot, String> {
+    let node = state.get_node(&app).await?;
+    node.create_group_room(room_name)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn fetch_group_rooms(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Vec<GroupRoom>, String> {
+    let node = state.get_node(&app).await?;
+    node.fetch_group_rooms().await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn join_group_room(
+    room_id: String,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<StateSnapshot, String> {
+    let node = state.get_node(&app).await?;
+    node.join_group_room(&room_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn respond_connection_request(
+    node_id: Option<String>,
     accept: bool,
     app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<StateSnapshot, String> {
     let node = state.get_node(&app).await?;
-    node.respond_connection_request(accept)
+    node.respond_connection_request(node_id, accept)
         .await
         .map_err(|e| e.to_string())
 }
@@ -174,9 +208,15 @@ async fn export_chat_history(
 }
 
 #[tauri::command]
-async fn disconnect_peer(app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
+async fn disconnect_peer(
+    node_id: Option<String>,
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
     let node = state.get_node(&app).await?;
-    node.disconnect().await.map_err(|e| e.to_string())
+    node.disconnect_peer(node_id)
+        .await
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -361,6 +401,9 @@ pub fn run() {
             connect_user,
             connect_peer,
             send_message,
+            create_group_room,
+            fetch_group_rooms,
+            join_group_room,
             respond_connection_request,
             clear_chat_history,
             export_chat_history,
