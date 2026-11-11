@@ -1,0 +1,71 @@
+services:
+  directory-server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "3100:3100"
+    environment:
+      - PORT=3100
+      - DATA_FILE=/data/users.json
+    volumes:
+      - server-data:/data
+    restart: unless-stopped
+
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/workspace/src-tauri/target
+      - xwin-cache:/root/.cache/cargo-xwin
+    command: >
+      bash -c "npm install && npm run build && node server/test-server.mjs && cd src-tauri && cargo test"
+
+  build-linux:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/workspace/src-tauri/target
+    command: >
+      bash -c "npm install && npx tauri build --bundles deb &&
+      mkdir -p /workspace/artifacts/linux &&
+      cp /workspace/src-tauri/target/release/simple-chat /workspace/artifacts/linux/simple-chat &&
+      cp -f /workspace/src-tauri/target/release/bundle/deb/*.deb /workspace/artifacts/linux/ 2>/dev/null || true &&
+      rm -rf /workspace/artifacts_root &&
+      chown -R 1000:982 /workspace/artifacts /workspace/dist /workspace/node_modules"
+
+  build-windows:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    working_dir: /workspace
+    volumes:
+      - .:/workspace
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-git:/usr/local/cargo/git
+      - target-cache:/workspace/src-tauri/target
+      - xwin-cache:/root/.cache/cargo-xwin
+    command: >
+      bash -c "npm install && npx tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc --bundles nsis &&
+      mkdir -p /workspace/artifacts/windows &&
+      cp /workspace/src-tauri/target/x86_64-pc-windows-msvc/release/simple-chat.exe /workspace/artifacts/windows/simple-chat.exe &&
+      cp -f /workspace/src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe /workspace/artifacts/windows/ 2>/dev/null || true &&
+      rm -rf /workspace/artifacts_root &&
+      chown -R 1000:982 /workspace/artifacts /workspace/dist /workspace/node_modules"
+
+volumes:
+  server-data:
+  cargo-registry:
+  cargo-git:
+  target-cache:
+  xwin-cache:
