@@ -66,6 +66,39 @@ function saveUsersToDisk(filePath, usersMap) {
   }
 }
 
+function loadRoomsFromDisk(filePath) {
+  const map = new Map();
+  try {
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf8");
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        for (const item of parsed) {
+          if (item && typeof item.roomId === "string") {
+            map.set(item.roomId, item);
+          }
+        }
+      }
+    }
+  } catch (err) {
+    console.error("[DirectoryServer] Failed to load rooms from disk:", err);
+  }
+  return map;
+}
+
+function saveRoomsToDisk(filePath, roomsMap) {
+  try {
+    const dir = path.dirname(filePath);
+    fs.mkdirSync(dir, { recursive: true });
+    const tempPath = `${filePath}.tmp`;
+    const data = JSON.stringify(Array.from(roomsMap.values()), null, 2);
+    fs.writeFileSync(tempPath, data, "utf8");
+    fs.renameSync(tempPath, filePath);
+  } catch (err) {
+    console.error("[DirectoryServer] Failed to save rooms to disk:", err);
+  }
+}
+
 function sendJson(res, statusCode, data) {
   const body = JSON.stringify(data);
   res.writeHead(statusCode, {
@@ -98,7 +131,9 @@ function readJsonBody(req) {
 }
 
 export function createDirectoryServer(storageFilePath = DATA_FILE) {
+  const roomsFilePath = `${storageFilePath}.rooms.json`;
   const users = loadUsersFromDisk(storageFilePath);
+  const rooms = loadRoomsFromDisk(roomsFilePath);
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
@@ -226,6 +261,167 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
         online: now - record.lastSeen <= ONLINE_TTL_MS,
         lastSeen: record.lastSeen,
       });
+      return;
+    }
+
+    // GET /api/rooms - List active group rooms
+    if (req.method === "GET" && url.pathname === "/api/rooms") {
+      const list = Array.from(rooms.values())
+        .filter((r) => Array.isArray(r.members) && r.members.length > 0)
+        .map((r) => ({
+          roomId: r.roomId,
+          name: r.name,
+          hostNodeId: r.hostNodeId,
+          hostName: r.hostName,
+          hasPassphrase: Boolean(
+            r.passphraseHash || String(r.roomId || "").startsWith("room-locked-")
+          ),
+          createdAt: r.createdAt,
+          members: r.members,
+        }));
+      sendJson(res, 200, { rooms: list });
+      return;
+    }
+
+    // POST /api/rooms - Create or join/update a group room (Ed25519 signed)
+    // Body: { roomId, name, passphraseHash, nodeId, publicKeyHex, nickname, username, ticket, timestamp, signatureHex }
+    if (req.method === "POST" && url.pathname === "/api/rooms") {
+      try {
+        const body = await readJsonBody(req);
+        const roomId = String(body.roomId || "").trim();
+        const name = String(body.name || "").trim();
+        const passphraseHash = body.passphraseHash
+          ? String(body.passphraseHash).trim().toLowerCase()
+          : null;
+        const nodeId = String(body.nodeId || "").trim().toLowerCase();
+        const publicKeyHex = String(body.publicKeyHex || nodeId)
+          .trim()
+          .toLowerCase();
+        const nickname = String(body.nickname || "User").trim();
+        const username = body.username
+          ? String(body.username).trim().toLowerCase()
+          : null;
+        const ticket = String(body.ticket || "").trim();
+        const timestamp = Number(body.timestamp || 0);
+        const signatureHex = String(body.signatureHex || "")
+          .trim()
+          .toLowerCase();
+
+        if (!roomId || !nodeId || !ticket || !signatureHex) {
+          sendJson(res, 400, { error: "Missing required room fields" });
+          return;
+        }
+
+        const signedPayload = `room:${roomId}:${nodeId}:${timestamp}`;
+        if (!verifyEd25519Signature(publicKeyHex, signedPayload, signatureHex)) {
+          sendJson(res, 401, { error: "Invalid Ed25519 room signature" });
+          return;
+        }
+
+        const now = Date.now();
+        let room = rooms.get(roomId);
+        if (!room) {
+          room = {
+            roomId,
+            name: name || `Room-${roomId.slice(0, 6)}`,
+            hostNodeId: nodeId,
+            hostName: nickname,
+            passphraseHash,
+            hasPassphrase: Boolean(passphraseHash),
+            createdAt: now,
+            members: [],
+          };
+        } else {
+          if (room.hostNodeId === nodeId) {
+            if (name) room.name = name;
+            if (body.passphraseHash !== undefined) {
+              room.passphraseHash = passphraseHash;
+              room.hasPassphrase = Boolean(passphraseHash);
+            }
+          } else if (room.passphraseHash && room.passphraseHash !== passphraseHash) {
+            sendJson(res, 403, { error: "ルームの合言葉が一致しません" });
+            return;
+          }
+        }
+
+        const memberEntry = {
+          nodeId,
+          nickname,
+          username,
+          ticket,
+          lastSeen: now,
+        };
+        const existingIdx = room.members.findIndex((m) => m.nodeId === nodeId);
+        if (existingIdx >= 0) {
+          room.members[existingIdx] = memberEntry;
+        } else {
+          room.members.push(memberEntry);
+        }
+
+        rooms.set(roomId, room);
+        saveRoomsToDisk(roomsFilePath, rooms);
+        sendJson(res, 200, {
+          ok: true,
+          room: {
+            roomId: room.roomId,
+            name: room.name,
+            hostNodeId: room.hostNodeId,
+            hostName: room.hostName,
+            hasPassphrase: Boolean(room.passphraseHash),
+            createdAt: room.createdAt,
+            members: room.members,
+          },
+        });
+      } catch (err) {
+        sendJson(res, 400, { error: String(err.message || err) });
+      }
+      return;
+    }
+
+    // POST /api/rooms/:roomId/leave - Leave a group room
+    if (
+      req.method === "POST" &&
+      url.pathname.startsWith("/api/rooms/") &&
+      url.pathname.endsWith("/leave")
+    ) {
+      try {
+        const roomId = decodeURIComponent(
+          url.pathname.slice("/api/rooms/".length, -"/leave".length)
+        ).trim();
+        const body = await readJsonBody(req);
+        const nodeId = String(body.nodeId || "").trim().toLowerCase();
+        const publicKeyHex = String(body.publicKeyHex || nodeId)
+          .trim()
+          .toLowerCase();
+        const timestamp = Number(body.timestamp || 0);
+        const signatureHex = String(body.signatureHex || "")
+          .trim()
+          .toLowerCase();
+
+        const signedPayload = `leave:${roomId}:${nodeId}:${timestamp}`;
+        if (!verifyEd25519Signature(publicKeyHex, signedPayload, signatureHex)) {
+          sendJson(res, 401, { error: "Invalid Ed25519 leave signature" });
+          return;
+        }
+
+        const room = rooms.get(roomId);
+        if (room) {
+          room.members = room.members.filter((m) => m.nodeId !== nodeId);
+          if (room.members.length === 0) {
+            rooms.delete(roomId);
+          } else {
+            if (room.hostNodeId === nodeId) {
+              room.hostNodeId = room.members[0].nodeId;
+              room.hostName = room.members[0].nickname;
+            }
+            rooms.set(roomId, room);
+          }
+          saveRoomsToDisk(roomsFilePath, rooms);
+        }
+        sendJson(res, 200, { ok: true });
+      } catch (err) {
+        sendJson(res, 400, { error: String(err.message || err) });
+      }
       return;
     }
 
