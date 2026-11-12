@@ -7,6 +7,45 @@ const PORT = Number(process.env.PORT || 3100);
 const DATA_FILE =
   process.env.DATA_FILE || path.resolve(process.cwd(), "data", "users.json");
 const ONLINE_TTL_MS = 45_000;
+const MAX_TIMESTAMP_SKEW_MS = 5 * 60 * 1000; // 5 minutes validity window (replay protection)
+const MAX_USERS_LIMIT = 5000;
+const MAX_ROOMS_LIMIT = 1000;
+
+// Sliding rate limiter settings per client IP
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX_ALL = 120;
+const RATE_LIMIT_MAX_MUTATIONS = 40;
+const rateLimitMap = new Map();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of rateLimitMap.entries()) {
+    if (now > entry.resetAt) {
+      rateLimitMap.delete(ip);
+    }
+  }
+}, 60_000).unref();
+
+function checkRateLimit(req, isMutation = false) {
+  const ip =
+    req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+    req.socket.remoteAddress ||
+    "127.0.0.1";
+  const now = Date.now();
+  let entry = rateLimitMap.get(ip);
+  if (!entry || now > entry.resetAt) {
+    entry = { allCount: 0, mutationCount: 0, resetAt: now + RATE_LIMIT_WINDOW_MS };
+    rateLimitMap.set(ip, entry);
+  }
+  entry.allCount += 1;
+  if (isMutation) {
+    entry.mutationCount += 1;
+  }
+  if (entry.allCount > RATE_LIMIT_MAX_ALL || entry.mutationCount > RATE_LIMIT_MAX_MUTATIONS) {
+    return false;
+  }
+  return true;
+}
 
 // ASN.1 DER SPKI prefix for a 32-byte raw Ed25519 public key (OID 1.3.101.112)
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -148,6 +187,12 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
       return;
     }
 
+    const isMutation = req.method !== "GET" && req.method !== "HEAD";
+    if (!checkRateLimit(req, isMutation)) {
+      sendJson(res, 429, { error: "Too many requests. Please slow down." });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/health") {
       sendJson(res, 200, {
         status: "ok",
@@ -181,6 +226,21 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
           return;
         }
 
+        const now = Date.now();
+        if (!timestamp || Math.abs(now - timestamp) > MAX_TIMESTAMP_SKEW_MS) {
+          sendJson(res, 400, {
+            error: "Timestamp is invalid or expired (must be within 5 minutes)",
+          });
+          return;
+        }
+
+        if (!users.has(rawUsername) && users.size >= MAX_USERS_LIMIT) {
+          sendJson(res, 503, {
+            error: "Server capacity reached: user registration limit exceeded",
+          });
+          return;
+        }
+
         // Verify signed payload: `${rawUsername}:${nodeId}:${timestamp}`
         const signedPayload = `${rawUsername}:${nodeId}:${timestamp}`;
         if (!verifyEd25519Signature(publicKeyHex, signedPayload, signatureHex)) {
@@ -197,7 +257,6 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
           return;
         }
 
-        const now = Date.now();
         const record = {
           username: rawUsername,
           displayName: displayName || rawUsername,
@@ -312,13 +371,27 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
           return;
         }
 
+        const now = Date.now();
+        if (!timestamp || Math.abs(now - timestamp) > MAX_TIMESTAMP_SKEW_MS) {
+          sendJson(res, 400, {
+            error: "Timestamp is invalid or expired (must be within 5 minutes)",
+          });
+          return;
+        }
+
+        if (!rooms.has(roomId) && rooms.size >= MAX_ROOMS_LIMIT) {
+          sendJson(res, 503, {
+            error: "Server capacity reached: room limit exceeded",
+          });
+          return;
+        }
+
         const signedPayload = `room:${roomId}:${nodeId}:${timestamp}`;
         if (!verifyEd25519Signature(publicKeyHex, signedPayload, signatureHex)) {
           sendJson(res, 401, { error: "Invalid Ed25519 room signature" });
           return;
         }
 
-        const now = Date.now();
         let room = rooms.get(roomId);
         if (!room) {
           room = {
@@ -399,6 +472,14 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
           .toLowerCase();
 
         const signedPayload = `leave:${roomId}:${nodeId}:${timestamp}`;
+        const now = Date.now();
+        if (!timestamp || Math.abs(now - timestamp) > MAX_TIMESTAMP_SKEW_MS) {
+          sendJson(res, 400, {
+            error: "Timestamp is invalid or expired (must be within 5 minutes)",
+          });
+          return;
+        }
+
         if (!verifyEd25519Signature(publicKeyHex, signedPayload, signatureHex)) {
           sendJson(res, 401, { error: "Invalid Ed25519 leave signature" });
           return;
