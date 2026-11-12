@@ -294,6 +294,10 @@ pub fn sign_lan_beacon(
 
 /// Verify Ed25519 signature and ticket node_id of a `LanMatchBeacon`.
 pub fn verify_lan_beacon(beacon: &LanMatchBeacon) -> bool {
+    let now = now_millis();
+    if now.abs_diff(beacon.timestamp) > 60_000 {
+        return false;
+    }
     let Ok(pub_bytes) = HEXLOWER.decode(beacon.node_id.trim().as_bytes()) else {
         return false;
     };

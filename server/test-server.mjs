@@ -161,6 +161,32 @@ async function runTests() {
       "Hijacking an existing username after server restart must still return 403"
     );
 
+    // 4. Test expired timestamp rejection (replay protection)
+    const expiredTimestamp = Date.now() - 10 * 60 * 1000; // 10 minutes ago
+    const expPayload = `bob:${malloryRawPubHex}:${expiredTimestamp}`;
+    const expSigHex = crypto
+      .sign(null, Buffer.from(expPayload, "utf8"), malloryKeys.privateKey)
+      .toString("hex");
+
+    const expiredRes = await fetch(`${baseUrl2}/api/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: "bob",
+        displayName: "Bob Expired",
+        nodeId: malloryRawPubHex,
+        publicKeyHex: malloryRawPubHex,
+        ticket: "fake-ticket",
+        timestamp: expiredTimestamp,
+        signatureHex: expSigHex,
+      }),
+    });
+    assert.equal(
+      expiredRes.status,
+      400,
+      "Expired timestamp registration must be rejected with 400"
+    );
+
     console.log(
       "[test-server] All directory, Ed25519 verification & disk persistence tests passed!"
     );
