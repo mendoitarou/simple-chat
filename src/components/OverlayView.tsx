@@ -20,6 +20,8 @@ const BUBBLE_REMOVE_MS = 5000;
 export const OverlayView: React.FC = () => {
   const [peers, setPeers] = useState<PeerInfo[]>([]);
   const [roomName, setRoomName] = useState<string | null>(null);
+  const [matchingEnabled, setMatchingEnabled] = useState<boolean>(false);
+  const [matchingTag, setMatchingTag] = useState<string>("");
   const [pendingRequests, setPendingRequests] = useState<PendingRequestInfo[]>(
     []
   );
@@ -70,6 +72,8 @@ export const OverlayView: React.FC = () => {
       .then((snap) => {
         setPeers(snap.connectedPeers || []);
         setRoomName(snap.roomName || null);
+        setMatchingEnabled(Boolean(snap.matchingEnabled));
+        setMatchingTag(snap.matchingTag || "");
         setPendingRequests(snap.pendingRequests || []);
         setNickname(snap.nickname);
       })
@@ -88,6 +92,7 @@ export const OverlayView: React.FC = () => {
               peer: payload.peer,
               introducedBy: payload.introducedBy,
               roomName: payload.roomName,
+              matchedTag: payload.matchedTag,
             },
           ];
         });
@@ -118,6 +123,8 @@ export const OverlayView: React.FC = () => {
       } else if (payload.type === "state-updated") {
         setPeers(payload.snapshot.connectedPeers || []);
         setRoomName(payload.snapshot.roomName || null);
+        setMatchingEnabled(Boolean(payload.snapshot.matchingEnabled));
+        setMatchingTag(payload.snapshot.matchingTag || "");
         setPendingRequests(payload.snapshot.pendingRequests || []);
         setNickname(payload.snapshot.nickname);
       }
@@ -139,6 +146,11 @@ export const OverlayView: React.FC = () => {
 
   const statusText = (() => {
     if (peers.length === 0) {
+      if (matchingEnabled) {
+        return matchingTag
+          ? `📡 マッチング中 (#${matchingTag})`
+          : "📡 マッチング中";
+      }
       return roomName ? `🏠 ${roomName} (待機中)` : "未接続";
     }
     if (peers.length === 1) {
@@ -150,6 +162,24 @@ export const OverlayView: React.FC = () => {
       ? `👥 ${roomName} (${peers.length + 1}人)`
       : `👥 ${peers[0].nickname} 他${peers.length - 1}名`;
   })();
+
+  const handleToggleMatching = async () => {
+    try {
+      const next = !matchingEnabled;
+      const snap = await invoke<StateSnapshot>("set_lan_matching", {
+        enabled: next,
+        matchingTag,
+      });
+      setMatchingEnabled(snap.matchingEnabled);
+      showTransientNotice(
+        next
+          ? "📡 マッチングチャットをONにしました"
+          : "📡 マッチングチャットをOFFにしました"
+      );
+    } catch (err) {
+      showTransientNotice(`マッチング切替エラー: ${String(err)}`);
+    }
+  };
 
   const handleQuickSend = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -202,17 +232,21 @@ export const OverlayView: React.FC = () => {
         {activeReq && (
           <div className="ephemeral-bubble request-bubble pop-in">
             <div className="request-title">
-              {activeReq.introducedBy
-                ? `🔗 ${activeReq.introducedBy} さんからのグループ紹介`
-                : "📩 通信リクエスト"}
+              {activeReq.matchedTag !== undefined && activeReq.matchedTag !== null
+                ? `📡 マッチングチャット！${activeReq.matchedTag ? ` (#${activeReq.matchedTag})` : ""}`
+                : activeReq.introducedBy
+                  ? `🔗 ${activeReq.introducedBy} さんからのグループ紹介`
+                  : "📩 通信リクエスト"}
             </div>
             <div className="request-body">
               <strong>{activeReq.peer.nickname}</strong>
               {activeReq.peer.username ? ` (@${activeReq.peer.username})` : ""}
               {activeReq.roomName ? ` [🏠 ${activeReq.roomName}]` : ""}{" "}
-              {activeReq.introducedBy
-                ? "をグループメンバーとして接続しますか？"
-                : "からP2P接続の要求があります"}
+              {activeReq.matchedTag !== undefined && activeReq.matchedTag !== null
+                ? "さんとマッチングしました！接続しますか？"
+                : activeReq.introducedBy
+                  ? "をグループメンバーとして接続しますか？"
+                  : "からP2P接続の要求があります"}
             </div>
             <div className="request-actions">
               <button
@@ -220,7 +254,9 @@ export const OverlayView: React.FC = () => {
                 className="btn-approve"
                 onClick={() => handleRespondRequest(activeReq.peer.nodeId, true)}
               >
-                承認する
+                {activeReq.matchedTag !== undefined && activeReq.matchedTag !== null
+                  ? "接続する"
+                  : "承認する"}
               </button>
               <button
                 type="button"
@@ -229,7 +265,9 @@ export const OverlayView: React.FC = () => {
                   handleRespondRequest(activeReq.peer.nodeId, false)
                 }
               >
-                拒否
+                {activeReq.matchedTag !== undefined && activeReq.matchedTag !== null
+                  ? "見送る"
+                  : "拒否"}
               </button>
             </div>
           </div>
@@ -371,6 +409,18 @@ export const OverlayView: React.FC = () => {
             title="ミニ入力欄の表示/非表示"
           >
             💬
+          </button>
+          <button
+            type="button"
+            className={`overlay-icon-btn ${matchingEnabled ? "matching-active" : ""}`}
+            onClick={handleToggleMatching}
+            title={
+              matchingEnabled
+                ? "マッチングチャットON (クリックで停止)"
+                : "クリックしてマッチングチャットを開始"
+            }
+          >
+            {matchingEnabled ? "📡 ON" : "📡 OFF"}
           </button>
           <button
             type="button"

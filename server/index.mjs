@@ -266,20 +266,33 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
 
     // GET /api/rooms - List active group rooms
     if (req.method === "GET" && url.pathname === "/api/rooms") {
-      const list = Array.from(rooms.values()).filter(
-        (r) => Array.isArray(r.members) && r.members.length > 0
-      );
+      const list = Array.from(rooms.values())
+        .filter((r) => Array.isArray(r.members) && r.members.length > 0)
+        .map((r) => ({
+          roomId: r.roomId,
+          name: r.name,
+          hostNodeId: r.hostNodeId,
+          hostName: r.hostName,
+          hasPassphrase: Boolean(
+            r.passphraseHash || String(r.roomId || "").startsWith("room-locked-")
+          ),
+          createdAt: r.createdAt,
+          members: r.members,
+        }));
       sendJson(res, 200, { rooms: list });
       return;
     }
 
     // POST /api/rooms - Create or join/update a group room (Ed25519 signed)
-    // Body: { roomId, name, nodeId, publicKeyHex, nickname, username, ticket, timestamp, signatureHex }
+    // Body: { roomId, name, passphraseHash, nodeId, publicKeyHex, nickname, username, ticket, timestamp, signatureHex }
     if (req.method === "POST" && url.pathname === "/api/rooms") {
       try {
         const body = await readJsonBody(req);
         const roomId = String(body.roomId || "").trim();
         const name = String(body.name || "").trim();
+        const passphraseHash = body.passphraseHash
+          ? String(body.passphraseHash).trim().toLowerCase()
+          : null;
         const nodeId = String(body.nodeId || "").trim().toLowerCase();
         const publicKeyHex = String(body.publicKeyHex || nodeId)
           .trim()
@@ -313,11 +326,22 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
             name: name || `Room-${roomId.slice(0, 6)}`,
             hostNodeId: nodeId,
             hostName: nickname,
+            passphraseHash,
+            hasPassphrase: Boolean(passphraseHash),
             createdAt: now,
             members: [],
           };
-        } else if (name && room.hostNodeId === nodeId) {
-          room.name = name;
+        } else {
+          if (room.hostNodeId === nodeId) {
+            if (name) room.name = name;
+            if (body.passphraseHash !== undefined) {
+              room.passphraseHash = passphraseHash;
+              room.hasPassphrase = Boolean(passphraseHash);
+            }
+          } else if (room.passphraseHash && room.passphraseHash !== passphraseHash) {
+            sendJson(res, 403, { error: "ルームの合言葉が一致しません" });
+            return;
+          }
         }
 
         const memberEntry = {
@@ -336,7 +360,18 @@ export function createDirectoryServer(storageFilePath = DATA_FILE) {
 
         rooms.set(roomId, room);
         saveRoomsToDisk(roomsFilePath, rooms);
-        sendJson(res, 200, { ok: true, room });
+        sendJson(res, 200, {
+          ok: true,
+          room: {
+            roomId: room.roomId,
+            name: room.name,
+            hostNodeId: room.hostNodeId,
+            hostName: room.hostName,
+            hasPassphrase: Boolean(room.passphraseHash),
+            createdAt: room.createdAt,
+            members: room.members,
+          },
+        });
       } catch (err) {
         sendJson(res, 400, { error: String(err.message || err) });
       }

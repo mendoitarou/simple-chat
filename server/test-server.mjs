@@ -59,8 +59,8 @@ async function runTests() {
     assert.equal(regData.ok, true);
     assert.equal(regData.user.username, "alice");
 
-    // Create a group room signed by Alice
-    const roomPayload = `room:room-dev-1:${aliceRawPubHex}:${timestamp}`;
+    // Create a passphrase-protected group room signed by Alice
+    const roomPayload = `room:room-locked-dev-1:${aliceRawPubHex}:${timestamp}`;
     const roomSigHex = crypto
       .sign(null, Buffer.from(roomPayload, "utf8"), aliceKeys.privateKey)
       .toString("hex");
@@ -68,8 +68,9 @@ async function runTests() {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        roomId: "room-dev-1",
+        roomId: "room-locked-dev-1",
         name: "Dev Lounge",
+        passphraseHash: "deadbeef1234567890",
         nodeId: aliceRawPubHex,
         publicKeyHex: aliceRawPubHex,
         nickname: "Alice Wonderland",
@@ -82,6 +83,7 @@ async function runTests() {
     assert.equal(roomRes.status, 200);
     const roomData = await roomRes.json();
     assert.equal(roomData.room.name, "Dev Lounge");
+    assert.equal(roomData.room.hasPassphrase, true);
     assert.equal(roomData.room.members.length, 1);
   } finally {
     await new Promise((resolve) => server.close(resolve));
@@ -107,13 +109,14 @@ async function runTests() {
     const roomsData = await roomsRes.json();
     assert.equal(roomsData.rooms.length, 1);
     assert.equal(roomsData.rooms[0].name, "Dev Lounge");
+    assert.equal(roomsData.rooms[0].hasPassphrase, true);
 
     // Leave room and verify auto-cleanup when 0 members remain
-    const leavePayload = `leave:room-dev-1:${aliceRawPubHex}:${timestamp}`;
+    const leavePayload = `leave:room-locked-dev-1:${aliceRawPubHex}:${timestamp}`;
     const leaveSigHex = crypto
       .sign(null, Buffer.from(leavePayload, "utf8"), aliceKeys.privateKey)
       .toString("hex");
-    const leaveRes = await fetch(`${baseUrl2}/api/rooms/room-dev-1/leave`, {
+    const leaveRes = await fetch(`${baseUrl2}/api/rooms/room-locked-dev-1/leave`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

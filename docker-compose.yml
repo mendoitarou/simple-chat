@@ -10,6 +10,7 @@ services:
       - DATA_FILE=/data/users.json
     volumes:
       - server-data:/data
+      - ./server/index.mjs:/app/index.mjs:ro
     restart: unless-stopped
 
   test:

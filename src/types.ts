@@ -8,6 +8,7 @@ export interface PendingRequestInfo {
   peer: PeerInfo;
   introducedBy?: string | null;
   roomName?: string | null;
+  matchedTag?: string | null;
 }
 
 export interface ChatMessagePayload {
@@ -17,6 +18,9 @@ export interface ChatMessagePayload {
   content: string;
   timestamp: number;
   isSelf: boolean;
+  channelKind?: string;
+  channelId?: string;
+  channelName?: string;
 }
 
 export interface DirectoryUser {
@@ -40,6 +44,7 @@ export interface GroupRoom {
   name: string;
   hostNodeId: string;
   hostName: string;
+  hasPassphrase?: boolean;
   members: GroupRoomMember[];
 }
 
@@ -50,8 +55,12 @@ export interface StateSnapshot {
   username: string | null;
   serverUrl: string;
   registeredOnServer: boolean;
+  matchingEnabled: boolean;
+  matchingTag: string;
   roomId: string | null;
   roomName: string | null;
+  roomHasPassphrase?: boolean;
+  activeChannelId?: string | null;
   connectedPeer: PeerInfo | null;
   connectedPeers: PeerInfo[];
   pendingRequest: PeerInfo | null;
@@ -65,6 +74,7 @@ export type P2PEvent =
       peer: PeerInfo;
       introducedBy?: string | null;
       roomName?: string | null;
+      matchedTag?: string | null;
     }
   | {
       type: "peer-connected";
